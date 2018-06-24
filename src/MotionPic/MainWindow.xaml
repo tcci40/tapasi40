@@ -1,0 +1,339 @@
+﻿<Window
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:controls="clr-namespace:AForge.Controls;assembly=AForge.Controls"
+        xmlns:vm="clr-namespace:MotionPic.ViewModel"
+        xmlns:local="clr-namespace:MotionPic"
+        xmlns:Themes="clr-namespace:Microsoft.Windows.Themes;assembly=PresentationFramework.Classic" x:Class="MotionPic.MainWindow"
+        mc:Ignorable="d"
+        d:DataContext="{d:DesignInstance {x:Type vm:MainGenericVM}}"
+        
+        Title="MainWindow" Height="760" Width="480">
+    <Window.Resources>
+        <local:ValueAngleConverter x:Key="valueAngleConverter"/>
+        <local:ValueTextConverter x:Key="valueTextConverter"/>
+        <Color x:Key="InvPrimary">#5264AA</Color>
+        <Color x:Key="InvSecondary">#A5AED8</Color>
+        <Color x:Key="InvHighlight">#F9B268</Color>
+
+    </Window.Resources>
+    <Grid >
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="1*" />
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="1*"></RowDefinition>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+
+
+
+        <StackPanel MinWidth="50" HorizontalAlignment="Left" Grid.Column="0" DataContext="{Binding aViewModel, Mode=TwoWay}"  >
+            <ComboBox ItemsSource="{Binding VidSourceCollection}" SelectedIndex="{Binding SelectedVidSourceCollectionIndex}" IsReadOnly="True">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                        <ListBoxItem Content="{Binding Name, Mode=OneWay}" ToolTip="{Binding MonikerString, Mode=OneWay}" >
+                        </ListBoxItem>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+            <ComboBox Name="cb" Grid.IsSharedSizeScope="True" ItemsSource="{DynamicResource items}"  SelectedIndex="{Binding SelectedVidCapCollectionIndex, Mode=TwoWay}" IsReadOnly="True" >
+                <ComboBox.Resources>
+                    <CompositeCollection x:Key="items">
+                        <ComboBoxItem IsEnabled="False">
+                            <Grid TextElement.FontWeight="Bold">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition SharedSizeGroup="A"/>
+                                    <ColumnDefinition SharedSizeGroup="B"/>
+                                    <ColumnDefinition SharedSizeGroup="C"/>
+                                    <ColumnDefinition SharedSizeGroup="D"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.Children>
+                                    <TextBlock Grid.Column="0" Text="width"/>
+                                    <TextBlock Grid.Column="1" Text="height"/>
+                                    <TextBlock Grid.Column="2" Text="maxFPS"/>
+                                    <TextBlock Grid.Column="3" Text="bpp"/>
+                                </Grid.Children>
+                            </Grid>
+                        </ComboBoxItem>
+                        <Separator/>
+                        <CollectionContainer Collection="{Binding Source={x:Reference cb}}"/>
+                    </CompositeCollection>
+
+                    <DataTemplate DataType="{x:Type ComboBox}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition SharedSizeGroup="A"/>
+                                <ColumnDefinition SharedSizeGroup="B"/>
+                                <ColumnDefinition SharedSizeGroup="C"/>
+                                <ColumnDefinition SharedSizeGroup="D"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.Children>
+                                <ListBoxItem Grid.Column="0" Content="{Binding FrameSize.Width}"></ListBoxItem>
+                                <ListBoxItem Grid.Column="1" Content="{Binding FrameSize.Height}"></ListBoxItem>
+                                <ListBoxItem Grid.Column="2" Content="{Binding MaximumFrameRate}"></ListBoxItem>
+                                <ListBoxItem Grid.Column="3" Content="{Binding BitCount}"></ListBoxItem>
+                            </Grid.Children>
+                        </Grid>
+                    </DataTemplate>
+                </ComboBox.Resources>
+
+
+            </ComboBox>
+            <ToggleButton Content="Run Camera" Command="{Binding CommandRunCamrera, Mode=OneWay}" CommandParameter="{Binding IsChecked, RelativeSource={RelativeSource Self}}"  />
+
+
+            <Ellipse Stretch="UniformToFill" RenderTransformOrigin="0.5,0.5">
+                <Ellipse.RenderTransform>
+                    <TransformGroup>
+                        <ScaleTransform/>
+                        <SkewTransform/>
+                        <RotateTransform Angle="{Binding ControlAngle}"/>
+                        <TranslateTransform/>
+                    </TransformGroup>
+                </Ellipse.RenderTransform>
+                <Ellipse.Fill>
+                    <ImageBrush ImageSource="{Binding CurrentPicture, Mode=OneWay, ValidatesOnNotifyDataErrors=False}" Stretch="UniformToFill" />
+                </Ellipse.Fill>
+            </Ellipse>
+
+            <!--<Image Source="{Binding CurrentPicture, IsAsync=True, Mode=OneWay, ValidatesOnNotifyDataErrors=False}" RenderTransformOrigin="0.5,0.5">
+                <Image.RenderTransform>
+                    <TransformGroup>
+                        <ScaleTransform/>
+                        <SkewTransform/>
+                        <RotateTransform Angle="{Binding ControlAngle}"/>
+                        <TranslateTransform/>
+                    </TransformGroup>
+                </Image.RenderTransform>
+            </Image>-->
+
+            <!--<WindowsFormsHost x:Name="VideoSourceWindowsFormsHost" Margin="10" Background="Transparent">
+                <controls:PictureBox x:Name="AforgePicturBoxXaml" ></controls:PictureBox>
+            </WindowsFormsHost>-->
+
+            <Grid VerticalAlignment="Bottom" >
+                <Grid.Background>
+                    <SolidColorBrush Color="{DynamicResource {x:Static SystemColors.ActiveBorderColorKey}}"/>
+                </Grid.Background>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <Label Content="Manual Rotation Angle" ></Label>
+                    <TextBox Name="setAngle" Text="{Binding ControlAngle, FallbackValue=0.0, Mode=TwoWay, NotifyOnTargetUpdated=True, StringFormat=\{0:F1\}, TargetNullValue=0.0, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Top" MaxLines="1" HorizontalContentAlignment="Right"
+                         MouseDoubleClick="SelectAddress"
+                         GotKeyboardFocus="SelectAddress"
+                         PreviewMouseLeftButtonDown="SelectivelyIgnoreMouseButton"
+                         AutoWordSelection="True" ToolTip="deg" />
+                </StackPanel>
+                <Grid MaxHeight="120" MaxWidth="120" MinHeight="15" MinWidth="15" Grid.Column="1">
+
+                    <Slider Name="knob" Value="{Binding ControlAngle}" Maximum="360" HorizontalContentAlignment="Right" VerticalContentAlignment="Stretch" Grid.Column="1">
+
+                        <Slider.Template>
+
+                            <ControlTemplate>
+                                <Viewbox>
+                                    <Canvas Width="300" Height="300">
+                                        <Ellipse  Width="300" Height="300" Canvas.Left="0" Canvas.Top="0" 
+                                    StrokeThickness="10"
+                                    MouseLeftButtonUp="Ellipse_MouseLeftButtonUp"
+                                    MouseMove="Ellipse_MouseMove">
+                                            <Ellipse.Stroke>
+                                                <SolidColorBrush Color="{DynamicResource InvPrimary}"/>
+                                            </Ellipse.Stroke>
+                                            <Ellipse.Fill>
+                                                <SolidColorBrush Color="{StaticResource InvSecondary}"/>
+                                            </Ellipse.Fill>
+
+                                        </Ellipse>
+                                        <Ellipse  Width="60" Height="60" Canvas.Left="120" Canvas.Top="120">
+                                            <Ellipse.Fill>
+                                                <SolidColorBrush Color="{StaticResource InvPrimary}"/>
+                                            </Ellipse.Fill>
+
+                                        </Ellipse>
+                                        <Canvas>
+                                            <Line StrokeThickness="10" X1="150" Y1="150" X2="150" Y2="10"
+                                        MouseLeftButtonUp="Ellipse_MouseLeftButtonUp">
+                                                <Line.Stroke>
+                                                    <SolidColorBrush Color="{StaticResource InvHighlight}"/>
+                                                </Line.Stroke>
+                                            </Line>
+                                            <Ellipse  Width="20" Height="20" Canvas.Left="140" Canvas.Top="0" 
+                                        MouseLeftButtonDown="Ellipse_MouseLeftButtonDown"
+                                        MouseLeftButtonUp="Ellipse_MouseLeftButtonUp">
+                                                <!--<Ellipse.ToolTip>
+                                            <ToolTip>
+                                                <Binding RelativeSource="{RelativeSource TemplatedParent}"
+                                                    Path="Value" Converter="{StaticResource valueTextConverter}"/>
+                                            </ToolTip>
+                                        </Ellipse.ToolTip>-->
+                                                <Ellipse.Fill>
+                                                    <SolidColorBrush Color="{StaticResource InvHighlight}"/>
+                                                </Ellipse.Fill>
+                                            </Ellipse>
+                                            <Canvas.RenderTransform>
+                                                <RotateTransform CenterX="150" CenterY="150">
+                                                    <RotateTransform.Angle>
+                                                        <MultiBinding Converter="{StaticResource valueAngleConverter}">
+                                                            <Binding RelativeSource="{RelativeSource TemplatedParent}" Path="Value"/>
+                                                            <Binding RelativeSource="{RelativeSource TemplatedParent}" Path="Minimum"/>
+                                                            <Binding RelativeSource="{RelativeSource TemplatedParent}" Path="Maximum"/>
+                                                        </MultiBinding>
+                                                    </RotateTransform.Angle>
+                                                </RotateTransform>
+                                            </Canvas.RenderTransform>
+                                        </Canvas>
+                                    </Canvas>
+                                </Viewbox>
+                            </ControlTemplate>
+                        </Slider.Template>
+                    </Slider>
+                </Grid>
+            </Grid>
+           
+
+        </StackPanel>
+        <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch" />
+        <StackPanel Grid.Column="2" >
+            <StackPanel DataContext="{Binding aux1VM,Mode=TwoWay}">
+                    <ComboBox ItemsSource="{Binding VidSourceCollection, Mode=OneWay}" SelectedIndex="{Binding SelectedVidSourceCollectionIndex, Mode=OneWayToSource}" IsReadOnly="True" >
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <ListBoxItem Content="{Binding Name, Mode=OneWay}" ToolTip="{Binding MonikerString, Mode=OneWay}" >
+                                </ListBoxItem>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <ComboBox Grid.IsSharedSizeScope="True" ItemsSource="{DynamicResource items}"  SelectedIndex="{Binding SelectedVidCapCollectionIndex, Mode=TwoWay}" IsReadOnly="True" VerticalAlignment="Top" HorizontalAlignment="Left" >
+                    <ComboBox.Resources>
+                        <CompositeCollection x:Key="items">
+                            <ComboBoxItem IsEnabled="False">
+                                <Grid TextElement.FontWeight="Bold">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition SharedSizeGroup="A"/>
+                                        <ColumnDefinition SharedSizeGroup="B"/>
+                                        <ColumnDefinition SharedSizeGroup="C"/>
+                                        <ColumnDefinition SharedSizeGroup="D"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.Children>
+                                        <TextBlock Grid.Column="0" Text="width"/>
+                                        <TextBlock Grid.Column="1" Text="height"/>
+                                        <TextBlock Grid.Column="2" Text="maxFPS"/>
+                                        <TextBlock Grid.Column="3" Text="bpp"/>
+                                    </Grid.Children>
+                                </Grid>
+                            </ComboBoxItem>
+                            <Separator/>
+                            <CollectionContainer Collection="{Binding Source={x:Reference cb}}"/>
+                        </CompositeCollection>
+
+                        <DataTemplate DataType="{x:Type ComboBox}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition SharedSizeGroup="A"/>
+                                    <ColumnDefinition SharedSizeGroup="B"/>
+                                    <ColumnDefinition SharedSizeGroup="C"/>
+                                    <ColumnDefinition SharedSizeGroup="D"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.Children>
+                                    <ListBoxItem Grid.Column="0" Content="{Binding FrameSize.Width}"></ListBoxItem>
+                                    <ListBoxItem Grid.Column="1" Content="{Binding FrameSize.Height}"></ListBoxItem>
+                                    <ListBoxItem Grid.Column="2" Content="{Binding MaximumFrameRate}"></ListBoxItem>
+                                    <ListBoxItem Grid.Column="3" Content="{Binding BitCount}"></ListBoxItem>
+                                </Grid.Children>
+                            </Grid>
+                        </DataTemplate>
+                    </ComboBox.Resources>
+
+
+                   </ComboBox>
+                   <ToggleButton Content="Run Camera" Command="{Binding CommandRunCamrera, Mode=OneWay}" CommandParameter="{Binding IsChecked, RelativeSource={RelativeSource Self}}" DockPanel.Dock="Right"  />
+           
+                    <Image Source="{Binding CurrentPicture, Mode=OneWay, ValidatesOnNotifyDataErrors=False}"   Stretch="Uniform" >
+                    </Image>
+            </StackPanel>
+            <StackPanel DataContext="{Binding aux2VM,Mode=TwoWay}" >
+                <ComboBox ItemsSource="{Binding VidSourceCollection, Mode=OneWay}" SelectedIndex="{Binding SelectedVidSourceCollectionIndex, Mode=OneWayToSource}" IsReadOnly="True" VerticalAlignment="Top">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <ListBoxItem Content="{Binding Name, Mode=OneWay}" ToolTip="{Binding MonikerString, Mode=OneWay}" >
+                            </ListBoxItem>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <ComboBox Grid.IsSharedSizeScope="True" ItemsSource="{DynamicResource items}"  SelectedIndex="{Binding SelectedVidCapCollectionIndex, Mode=TwoWay}" IsReadOnly="True" VerticalAlignment="Top" >
+                    <ComboBox.Resources>
+                        <CompositeCollection x:Key="items">
+                            <ComboBoxItem IsEnabled="False">
+                                <Grid TextElement.FontWeight="Bold">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition SharedSizeGroup="A"/>
+                                        <ColumnDefinition SharedSizeGroup="B"/>
+                                        <ColumnDefinition SharedSizeGroup="C"/>
+                                        <ColumnDefinition SharedSizeGroup="D"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.Children>
+                                        <TextBlock Grid.Column="0" Text="width"/>
+                                        <TextBlock Grid.Column="1" Text="height"/>
+                                        <TextBlock Grid.Column="2" Text="maxFPS"/>
+                                        <TextBlock Grid.Column="3" Text="bpp"/>
+                                    </Grid.Children>
+                                </Grid>
+                            </ComboBoxItem>
+                            <Separator/>
+                            <CollectionContainer Collection="{Binding Source={x:Reference cb}}"/>
+                        </CompositeCollection>
+
+                        <DataTemplate DataType="{x:Type ComboBox}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition SharedSizeGroup="A"/>
+                                    <ColumnDefinition SharedSizeGroup="B"/>
+                                    <ColumnDefinition SharedSizeGroup="C"/>
+                                    <ColumnDefinition SharedSizeGroup="D"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.Children>
+                                    <ListBoxItem Grid.Column="0" Content="{Binding FrameSize.Width}"></ListBoxItem>
+                                    <ListBoxItem Grid.Column="1" Content="{Binding FrameSize.Height}"></ListBoxItem>
+                                    <ListBoxItem Grid.Column="2" Content="{Binding MaximumFrameRate}"></ListBoxItem>
+                                    <ListBoxItem Grid.Column="3" Content="{Binding BitCount}"></ListBoxItem>
+                                </Grid.Children>
+                            </Grid>
+                        </DataTemplate>
+                    </ComboBox.Resources>
+
+
+                </ComboBox>
+                <ToggleButton Content="Run Camera" Command="{Binding CommandRunCamrera, Mode=OneWay}" CommandParameter="{Binding IsChecked, RelativeSource={RelativeSource Self}}" VerticalAlignment="Top"  />
+                <Image Source="{Binding CurrentPicture, Mode=OneWay, ValidatesOnNotifyDataErrors=False}"   Stretch="Uniform" >
+                </Image>
+            </StackPanel>
+        </StackPanel >
+        <StatusBar VerticalAlignment="Bottom" Grid.Row="1" Grid.ColumnSpan="3" DataContext="{Binding aViewModel,Mode=TwoWay}">
+            <StatusBarItem>
+                <TextBlock Name="dispControlAngle" Text="{Binding ControlAngle, StringFormat=Angle \{0:F1\}}" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock Name="dispControlWidth" Text="{Binding VidWidth, StringFormat=Width \{0:F0\}}" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock Name="dispControlHeight" Text="{Binding VidHeight, StringFormat=Height \{0:F0\}}" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock Name="dispFrames" Text="{Binding VidFPS, StringFormat=FPS: \{0:F1\}}" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock Name="dispBytes" Text="{Binding VidBytesRcvd, StringFormat=bytes: \{0\}}" />
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
+</Window>
