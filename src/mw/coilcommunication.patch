@@ -1,0 +1,776 @@
+diff --git a/motorware-current/sw/ide/ccs/cmd/f2806x/F28069F.cmd b/motorware-current/sw/ide/ccs/cmd/f2806x/F28069F.cmd
+index 37cd9be..281b28f 100644
+--- a/motorware-current/sw/ide/ccs/cmd/f2806x/F28069F.cmd
++++ b/motorware-current/sw/ide/ccs/cmd/f2806x/F28069F.cmd
+@@ -131,7 +131,9 @@ SECTIONS
+    csm_rsvd            : > CSM_RSVD,   PAGE = 0
+ 
+    /* Allocate uninitalized data sections: */
+-   .stack              : > RAMM0,      PAGE = 1
++   .stack              : > RAMM0,      PAGE = 1, fill = 0xDEAD,
++                        RUN_START(_STACK_START),
++                        RUN_END(_STACK_END)
+    .ebss               : > RAML2_3,    PAGE = 1
+    .esysmem            : > RAML2_3,    PAGE = 1
+ 
+diff --git a/motorware-current/sw/modules/hal/boards/TAPAS_V1.0/f28x/f2806x/src/hal.c b/motorware-current/sw/modules/hal/boards/TAPAS_V1.0/f28x/f2806x/src/hal.c
+index 6917b8c..06f41f5 100644
+--- a/motorware-current/sw/modules/hal/boards/TAPAS_V1.0/f28x/f2806x/src/hal.c
++++ b/motorware-current/sw/modules/hal/boards/TAPAS_V1.0/f28x/f2806x/src/hal.c
+@@ -1760,7 +1760,7 @@ void HAL_setupDMA(HAL_Handle handle){
+ 	DMA_BurstConfig(handle->DMAhandle, DMA_CH1, 0, 0, 0);
+ 
+ //***	DMA_TransferConfig(handle->DMAhandle, DMA_CH1, 15, 1, 0);
+-    DMA_TransferConfig(handle->DMAhandle, DMA_CH1, BUFFER_SIZE-1, 1, 0);
++    DMA_TransferConfig(handle->DMAhandle, DMA_CH1, BUFFER_SIZE_COCO-1, 1, 0);
+ 
+ 	DMA_WrapConfig(handle->DMAhandle, DMA_CH1, 0xFFFF, 0, 0xFFFF, 0);
+ 
+@@ -1774,7 +1774,7 @@ void HAL_setupDMA(HAL_Handle handle){
+ 	DMA_BurstConfig(handle->DMAhandle, DMA_CH2, 0, 0, 0);
+ 
+ //***	DMA_TransferConfig(handle->DMAhandle, DMA_CH2, 15, 0, 1);
+-	DMA_TransferConfig(handle->DMAhandle, DMA_CH2, BUFFER_SIZE-1, 0, 1);
++	DMA_TransferConfig(handle->DMAhandle, DMA_CH2, BUFFER_SIZE_COCO-1, 0, 1);
+ 
+ 	DMA_WrapConfig(handle->DMAhandle, DMA_CH2, 0xFFFF, 0, 0xFFFF, 0);
+ // hier war DMA_MREVTA
+@@ -1785,8 +1785,8 @@ void HAL_setupDMA(HAL_Handle handle){
+ 	DISABLE_PROTECTED_REGISTER_WRITE_MODE;
+ 
+ 	  /* setup DMA-Memory Adresses for the arrays */
+-	  DMA_AddrConfig(handle->DMAhandle, DMA_CH1, &handle->mcBSPAhandle->DXR1, tx_buffer);
+-	  DMA_AddrConfig(handle->DMAhandle, DMA_CH2, rx_buffer, &handle->mcBSPAhandle->DRR1);
++	  DMA_AddrConfig(handle->DMAhandle, DMA_CH1, &handle->mcBSPAhandle->DXR1, CoCoSO_buffer);
++	  DMA_AddrConfig(handle->DMAhandle, DMA_CH2, CoCoMO_buffer, &handle->mcBSPAhandle->DRR1);
+ 
+ 	  DMA_run(handle->DMAhandle, DMA_CH1);
+ 	  DMA_run(handle->DMAhandle, DMA_CH2);
+diff --git a/motorware-current/sw/modules/spiCTRL/src/32b/spiCTRL.c b/motorware-current/sw/modules/spiCTRL/src/32b/spiCTRL.c
+index 84d829d..14bc003 100644
+--- a/motorware-current/sw/modules/spiCTRL/src/32b/spiCTRL.c
++++ b/motorware-current/sw/modules/spiCTRL/src/32b/spiCTRL.c
+@@ -3,6 +3,8 @@
+ // McBsp Buffer
+ uint16_t rx_buffer[BUFFER_SIZE];
+ uint16_t tx_buffer[BUFFER_SIZE];
++uint16_t CoCoMO_buffer[BUFFER_SIZE_COCO];
++uint16_t CoCoSO_buffer[BUFFER_SIZE_COCO];
+ 
+ #pragma DATA_SECTION(rx_buffer, "DMARAML8")
+ #pragma DATA_SECTION(tx_buffer, "DMARAML8")
+@@ -53,8 +55,98 @@ uint16_t CalcCrc(uint16_t *data, uint16_t len_words)
+     }
+     return crc;
+ }// end of CalcCrc() function
++uint16_t GetNewSetpointsCoil(DMA_Handle DMAhandle, tCoCoMO *coilMasterOut, tCoCoSO *coilSlaveOut)
++{
++    static int EspSuccessfullCountdown = REQUIRED_SUCCESSFUL_ESP_TRANSACTIONS;
++    static uint16_t offset_rx;
++    uint16_t CH2_start_idx_write_block_plus_NUM_BUFFER;
++    uint16_t CH1_start_idx_read_block_plus_NUM_BUFFER;
++    uint16_t CH2_start_idx_read_block;
++    uint16_t CH1_start_idx_write_block;
++    uint32_t ch1_addr, ch2_addr;
++    static uint32_t recv_addr_last = (uint32_t) CoCoMO_buffer;
++
++    ch2_addr = DMAhandle->CH2.DST_ADDR_ACTIVE;
++    ch1_addr = DMAhandle->CH1.SRC_ADDR_ACTIVE;
++
++    // check we're not in mid-transfer and if we are, reload addresses to keep them synchronized
++    if ((ch2_addr != DMAhandle->CH2.DST_ADDR_ACTIVE)
++            || (ch1_addr != DMAhandle->CH1.SRC_ADDR_ACTIVE))
++    {
++        ch2_addr = DMAhandle->CH2.DST_ADDR_ACTIVE;
++        ch1_addr = DMAhandle->CH1.SRC_ADDR_ACTIVE;
++    }
++
++#define OFFSET_RX_TX_COIL ((3*DATA_SIZE_COCO)-2)
++    CH2_start_idx_write_block_plus_NUM_BUFFER =
++        ((ch2_addr - (uint32_t) CoCoMO_buffer + BUFFER_SIZE_COCO - offset_rx) / DATA_SIZE_COCO) * DATA_SIZE_COCO
++        + offset_rx;
++    CH2_start_idx_read_block =
++        (CH2_start_idx_write_block_plus_NUM_BUFFER - 1 - DATA_SIZE_COCO) % (BUFFER_SIZE_COCO);
++
++    CH1_start_idx_read_block_plus_NUM_BUFFER =
++        ((ch1_addr - (uint32_t) CoCoSO_buffer + BUFFER_SIZE_COCO - offset_rx - OFFSET_RX_TX_COIL) / DATA_SIZE_COCO) * DATA_SIZE_COCO
++        + offset_rx + OFFSET_RX_TX_COIL;
++    CH1_start_idx_write_block =
++        (CH1_start_idx_read_block_plus_NUM_BUFFER - 1 - DATA_SIZE_COCO) % (BUFFER_SIZE_COCO);
++
++    if (ch2_addr < recv_addr_last)
++        recv_addr_last -= BUFFER_SIZE_COCO;
++
++
++    if ((ch2_addr - recv_addr_last) == DATA_SIZE_COCO) // new data received / transmitted
++    {
++        recv_addr_last = ch2_addr;
++
++        coilSlaveOut->CRC = CalcCrc((uint16_t*) coilSlaveOut,
++                                    sizeof(tCoCoSO) - 1);
+ 
+-uint16_t GetNewSetpoints(DMA_Handle DMAhandle, tEspRx *my_esp_rx, tEspTx *my_esp_tx)
++        // copy the response user data into the DMA memory fields to be sent
++        uint16_t cp;
++        for (cp = 0; cp < DATA_SIZE_COCO; cp++)
++        {
++            CoCoSO_buffer[(CH1_start_idx_write_block + cp) % (BUFFER_SIZE_COCO)] =
++                    *((uint16_t *) coilSlaveOut + cp);
++        }
++
++        // copy the setpoints / parameters from the DMA memory into the struct
++        uint16_t rx;
++        for (rx = 0; rx < DATA_SIZE_COCO; rx++)
++        {
++            *((uint16_t *) coilMasterOut + rx) =
++                    CoCoMO_buffer[(CH2_start_idx_read_block + rx) % (BUFFER_SIZE_COCO)];
++        }
++
++        if (CalcCrc((uint16_t*) coilMasterOut, sizeof(tCoCoMO) - 1)
++                == coilMasterOut->CRC)
++        {
++            if (EspSuccessfullCountdown)
++            {
++                --EspSuccessfullCountdown;
++                return CACTUS_NOT_OK;
++            }
++            else
++            {
++                return CACTUS_NEW_DATA_OK;
++                // use new data
++            }
++
++        }
++        else // if (esp_valid_idx == 0)
++        {
++            ++offset_rx;
++            if (offset_rx > DATA_SIZE_COCO)
++                offset_rx = 0;
++            EspSuccessfullCountdown = REQUIRED_SUCCESSFUL_ESP_TRANSACTIONS;
++            return CACTUS_NOT_OK;
++        }
++    }
++    if (EspSuccessfullCountdown)
++        return CACTUS_NOT_OK;
++    else
++        return CACTUS_NO_RECEIVE;
++}
++uint16_t GetNewSetpoints_INACTIVE(DMA_Handle DMAhandle, tEspRx *my_esp_rx, tEspTx *my_esp_tx)
+ {
+ 	static int EspSuccessfullCountdown = REQUIRED_SUCCESSFUL_ESP_TRANSACTIONS;
+ 	static uint16_t offset_rx;
+@@ -77,11 +169,17 @@ uint16_t GetNewSetpoints(DMA_Handle DMAhandle, tEspRx *my_esp_rx, tEspTx *my_esp
+ 
+ #define OFFSET_RX_TX ((3*DATA_SIZE)-2)
+ 
+-	CH2_start_idx_write_block_plus_NUM_BUFFER = ((ch2_addr - (uint32_t)rx_buffer + DATA_SIZE*NUM_BUFFER - offset_rx )/DATA_SIZE)*DATA_SIZE + offset_rx;
+-	CH2_start_idx_read_block = (CH2_start_idx_write_block_plus_NUM_BUFFER -1 - DATA_SIZE) % (NUM_BUFFER*DATA_SIZE);
+-
+-	CH1_start_idx_read_block_plus_NUM_BUFFER = ((ch1_addr - (uint32_t)tx_buffer + DATA_SIZE*NUM_BUFFER - offset_rx  - OFFSET_RX_TX)/DATA_SIZE)*DATA_SIZE + offset_rx + OFFSET_RX_TX;
+-	CH1_start_idx_write_block = (CH1_start_idx_read_block_plus_NUM_BUFFER - 1 - DATA_SIZE) % (NUM_BUFFER*DATA_SIZE);
++    CH2_start_idx_write_block_plus_NUM_BUFFER = ((ch2_addr
++            - (uint32_t) rx_buffer + DATA_SIZE * NUM_BUFFER - offset_rx)
++            / DATA_SIZE) * DATA_SIZE + offset_rx;
++    CH2_start_idx_read_block = (CH2_start_idx_write_block_plus_NUM_BUFFER - 1
++            - DATA_SIZE) % (NUM_BUFFER * DATA_SIZE);
++
++    CH1_start_idx_read_block_plus_NUM_BUFFER = ((ch1_addr - (uint32_t) tx_buffer
++            + DATA_SIZE * NUM_BUFFER - offset_rx - OFFSET_RX_TX) / DATA_SIZE)
++            * DATA_SIZE + offset_rx + OFFSET_RX_TX;
++    CH1_start_idx_write_block = (CH1_start_idx_read_block_plus_NUM_BUFFER - 1
++            - DATA_SIZE) % (NUM_BUFFER * DATA_SIZE);
+ 
+ 	if (ch2_addr < recv_addr_last)
+ 		recv_addr_last -= NUM_BUFFER*DATA_SIZE;
+diff --git a/motorware-current/sw/modules/spiCTRL/src/32b/spiCTRL.h b/motorware-current/sw/modules/spiCTRL/src/32b/spiCTRL.h
+index 3f30f50..1a49e4c 100644
+--- a/motorware-current/sw/modules/spiCTRL/src/32b/spiCTRL.h
++++ b/motorware-current/sw/modules/spiCTRL/src/32b/spiCTRL.h
+@@ -34,6 +34,46 @@ typedef struct _tEspRx
+    uint16_t CRC;
+ } tEspRx;
+ 
++typedef struct _tCoCoMO
++{
++   uint16_t flags;
++   uint16_t u_msgseq;
++
++   float f_Coil_setCurrent1;
++   float f_Coil_setCurrent2;
++   float f_Coil_setCurrent3;
++   float f_Coil_setCurrent4;
++   float f_Coil_setCurrent5;
++   float f_Coil_setCurrent6;
++
++   uint16_t u_STATUS_DOUT;
++//   uint16_t u_reserved0; //0x55AA
++//   uint16_t u_reserved1; //0xAA55
++   uint16_t CRC;
++} tCoCoMO;
++
++typedef struct _tCoCoSO
++{
++   uint16_t flags;
++   uint16_t u_msgseq;
++   uint16_t u_STATUS_statusErr;
++   uint16_t spiStatus;
++
++   float f_STATUS_boardTemp;
++   float f_STATUS_UdcBus;
++   float f_STATUS_IdcBus;
++
++   float f_Coil_Current1;
++   float f_Coil_Current2;
++//   float f_Coil_Current3;
++//   float f_Coil_Current4;
++//   float f_Coil_Current5;
++//   float f_Coil_Current6;
++
++   uint16_t u_STATUS_DIN;
++   uint16_t CRC;
++} tCoCoSO;
++
+ typedef struct _tEspTx
+ {
+     uint16_t flags;
+@@ -62,19 +102,21 @@ typedef struct _tEspTx
+ } tEspTx;
+ 
+ #define DATA_SIZE (sizeof(struct _tEspRx) / sizeof(uint16_t))
++#define DATA_SIZE_COCO (sizeof(struct _tCoCoMO) / sizeof(uint16_t))
+ 
+ #define NUM_BUFFER 3  // Not to be modified
+ #define BUFFER_SIZE (DATA_SIZE*NUM_BUFFER)  // Not to be modified
+-
++#define BUFFER_SIZE_COCO (DATA_SIZE_COCO*NUM_BUFFER)
+ #define REQUIRED_SUCCESSFUL_ESP_TRANSACTIONS 5
+ 
+ 
+ extern uint16_t rx_buffer[BUFFER_SIZE];
+ extern uint16_t tx_buffer[BUFFER_SIZE];
+-
++extern uint16_t CoCoMO_buffer[BUFFER_SIZE_COCO];
++extern uint16_t CoCoSO_buffer[BUFFER_SIZE_COCO];
+ 
+ void GenerateCrcTable(void);
+ uint16_t CalcCrc(uint16_t *data, uint16_t len_words);
+ uint16_t GetNewSetpoints(DMA_Handle DMAhandle, tEspRx *my_esp_rx, tEspTx *my_esp_tx);
+-
++uint16_t GetNewSetpointsCoil(DMA_Handle DMAhandle, tCoCoMO *coilMasterOut, tCoCoSO *coilSlaveOut);
+ #endif /* SPICTRL_H_ */
+diff --git a/motorware-current/sw/solutions/instaspin_foc/src/TAPAS_quick_start.c b/motorware-current/sw/solutions/instaspin_foc/src/TAPAS_quick_start.c
+index eac3e83..56c30ea 100644
+--- a/motorware-current/sw/solutions/instaspin_foc/src/TAPAS_quick_start.c
++++ b/motorware-current/sw/solutions/instaspin_foc/src/TAPAS_quick_start.c
+@@ -30,7 +30,7 @@
+  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  * --/COPYRIGHT--*/
+ //! \file   solutions/instaspin_foc/src/proj_lab02c.c
+-//! \brief  All control from user code, only FAST™ feedback from ROM
++//! \brief  All control from user code, only FASTï¿½ feedback from ROM
+ //! \brief	Special variable scaling for improved motor ID, especially with low inductance motors
+ //! (C) Copyright 2011, Texas Instruments, Inc.
+ 
+@@ -39,7 +39,7 @@
+ 
+ //! \defgroup PROJ_LAB02c_OVERVIEW Project Overview
+ //!
+-//! Run InstaSPIN™-FOC from user memory (RAM/FLASH), only FAST™ in ROM
++//! Run InstaSPINï¿½-FOC from user memory (RAM/FLASH), only FASTï¿½ in ROM
+ //!	Special variable scaling for improved motor ID, especially with low inductance motors
+ 
+ // **************************************************************************
+@@ -66,7 +66,7 @@
+ // the globals
+ 
+ #define TAPAS_NORMAL_OP 0
+-#define TAPAS_UPPER_TEMP_LIMIT 80.0 // [°C]
++#define TAPAS_UPPER_TEMP_LIMIT 80.0 // [Â°C]
+ #define TAPAS_PROTECT_OVERTEMP 1
+ #define TAPAS_UPPER_CURRENT_LIMIT 6.0 // [A]
+ #define TAPAS_PROTECT_OVERCURRENT 2
+@@ -135,6 +135,11 @@ DRV_SPI_8305_Vars_t gDrvSpi8305Vars;
+ // Communication to Raspberry Pi via SPI
+ struct _tEspRx masterCmd;   // received commands from the Raspberry
+ struct _tEspTx slaveResp;   // sent response from TAPAS
++// Coils Communication to Raspberry Pi via SPI
++struct _tCoCoMO coilMasterOut; // received commands from the Raspberry, to be sent out to slaved TAPAS
++struct _tCoCoSO coilSlaveOut; // sent response from this TAPAS, received from slave TAPAS
++
++
+ volatile uint16_t spiStatus;
+ 
+ // for DC-Bus-Current calculation
+@@ -157,6 +162,8 @@ void main(void)
+     // initialize the data structures for the communication with the raspberry-PI
+   memset((void *) &masterCmd, 0, sizeof(masterCmd));
+   memset((void *) &slaveResp, 0, sizeof(slaveResp));
++  memset((void *) &coilMasterOut, 0, sizeof(coilMasterOut));
++  memset((void *) &coilSlaveOut, 0, sizeof(coilSlaveOut));
+ 
+   uint_least8_t estNumber = 0;
+ 
+@@ -292,42 +299,47 @@ void main(void)
+         // do the overtemperature check
+         if (_IQtoF(gMotorVars.TempSenDegCelsius) > TAPAS_UPPER_TEMP_LIMIT) {
+             TAPASProtect = TAPAS_PROTECT_OVERTEMP;
+-            slaveResp.u_STATUS_statusErr = TAPAS_PROTECT_OVERTEMP;
++            coilSlaveOut.u_STATUS_statusErr = TAPAS_PROTECT_OVERTEMP;
+         }else{
+             TAPASProtect = TAPAS_NORMAL_OP;
+-            slaveResp.u_STATUS_statusErr = TAPAS_NORMAL_OP;
++            coilSlaveOut.u_STATUS_statusErr = TAPAS_NORMAL_OP;
+         }
+         // do the overcurrent check
+         if( (_IQtoF(gMotorVars.IdcBus_A) > TAPAS_UPPER_CURRENT_LIMIT)
+              && (HAL_getDCbusCurrentOffsetCalibrationDone()) ){
+             TAPASProtect = TAPAS_PROTECT_OVERCURRENT;
+-            slaveResp.u_STATUS_statusErr = TAPAS_PROTECT_OVERCURRENT;
++            coilSlaveOut.u_STATUS_statusErr = TAPAS_PROTECT_OVERCURRENT;
+         }else{
+             TAPASProtect = TAPAS_NORMAL_OP;
+-            slaveResp.u_STATUS_statusErr = TAPAS_NORMAL_OP;
++            coilSlaveOut.u_STATUS_statusErr = TAPAS_NORMAL_OP;
+         }
+ 
+-        spiStatus = GetNewSetpoints(halHandle->DMAhandle,
+-                                    &masterCmd,
+-                                    &slaveResp);
++        spiStatus = GetNewSetpointsCoil(halHandle->DMAhandle,
++                                    &coilMasterOut,
++                                    &coilSlaveOut);
+         if(spiStatus != 0){
+-            slaveResp.spiStatus = 0xABCD;
++            if (spiStatus == 1){ //
++                coilSlaveOut.spiStatus = 0x1ABC;
++                coilSlaveOut.u_msgseq = coilMasterOut.u_msgseq;
++            }else{
++                coilSlaveOut.spiStatus = 0x2ABC;
++            }
+         }else{
+-            slaveResp.spiStatus = 0xBAD;
++            coilSlaveOut.spiStatus = 0xBAD;
+         }
+ 
+         HAL_calculateOffsetDCBusCurrent(halHandle, &gAdcData);
+ 
+         if(spiStatus != 0){
+             // overwrite the userparams needed for identification
+-            gUserParams.motor_type = MOTOR_Type_Pm;
++            /*gUserParams.motor_type = MOTOR_Type_Pm;
+             gUserParams.motor_numPolePairs = masterCmd.i_Motor_numPolePairs;
+             gUserParams.powerWarpGain = USER_POWERWARP_GAIN;
+             gUserParams.maxCurrent_resEst = (0.15) * masterCmd.f_Motor_ratedCurrent;
+             gUserParams.maxCurrent_indEst = (-1.0) * gUserParams.maxCurrent_resEst;
+             gUserParams.maxCurrent = masterCmd.f_Motor_ratedCurrent;
+             gUserParams.fluxEstFreq_Hz = masterCmd.f_Motor_fluxEstFrequency;
+-            gUserParams.RoverL_estFreq_Hz = masterCmd.f_Motor_RoverLestFrequencyHz;
++            gUserParams.RoverL_estFreq_Hz = masterCmd.f_Motor_RoverLestFrequencyHz;*/
+ 
+             // check for errors in user parameters
+             USER_checkForErrors(&gUserParams);
+@@ -340,14 +352,15 @@ void main(void)
+                 gMotorVars.Flag_enableSys = false;
+             }else{
+                 // get the speed and acceleration-setpoints
+-                gMotorVars.SpeedRef_krpm = masterCmd.f_CTRL_setpoint_speed;
+-                gMotorVars.MaxAccel_krpmps = masterCmd.f_CTRL_setpoint_accel;
++                //gMotorVars.SpeedRef_krpm = masterCmd.f_CTRL_setpoint_speed;
++                //gMotorVars.MaxAccel_krpmps = masterCmd.f_CTRL_setpoint_accel;
+ 
+                 // get the enable-flag
+ 
+ 
+-                if(masterCmd.flags & 0x0001){
++                if(coilMasterOut.flags & 0x0100){
+                     gMotorVars.Flag_enableSys = true;
++                    //coilSlaveOut.flags |= (0x0100);
+                 }else{
+                     gMotorVars.Flag_enableSys = false;
+                 }
+@@ -358,48 +371,32 @@ void main(void)
+ 
+     // loop while the enable system flag is true
+     while(gMotorVars.Flag_enableSys)
+-      {
+-        spiStatus = GetNewSetpoints(halHandle->DMAhandle,
+-                                    &masterCmd,
+-                                    &slaveResp);
++    {
++        spiStatus = GetNewSetpointsCoil(halHandle->DMAhandle,
++                                            &coilMasterOut,
++                                            &coilSlaveOut);
+ 
+         if(spiStatus != 0){
+-            // get the value for the run_identify - flag
+-
+-            if(masterCmd.flags & 0x0001){
++            coilSlaveOut.u_msgseq=coilMasterOut.u_msgseq;
++            if(coilMasterOut.flags & 0x0100){
+                 gMotorVars.Flag_enableSys = true;
+             }else{
+                 gMotorVars.Flag_enableSys = false;
+             }
+-
+-            if(masterCmd.flags & 0x0002){
+-                gMotorVars.Flag_Run_Identify = true;
+-            }else{
+-                gMotorVars.Flag_Run_Identify = false;
+-            }
+-
+-            // get the maximum allowed current, used for protection purposes
+-            gUserParams.maxCurrent = masterCmd.f_Motor_ratedCurrent;
+-            // get the speed and acceleration-setpoints
+-            gMotorVars.SpeedRef_krpm = _IQ(masterCmd.f_CTRL_setpoint_speed);
+-            gMotorVars.MaxAccel_krpmps = _IQ(masterCmd.f_CTRL_setpoint_accel);
+-        }else if (spiStatus == 0){
+-            gMotorVars.Flag_Run_Identify = false;
+-            gMotorVars.Flag_enableSys = false;
+         }
+ 
+         // do the overtemperature check
+-        if (_IQtoF(gMotorVars.TempSenDegCelsius) > 60.0){
++        if (_IQtoF(gMotorVars.TempSenDegCelsius) > TAPAS_UPPER_TEMP_LIMIT){
+             gMotorVars.Flag_Run_Identify = false;
+             TAPASProtect = TAPAS_PROTECT_OVERTEMP;
+-            slaveResp.u_STATUS_statusErr = TAPAS_PROTECT_OVERTEMP;
++            coilSlaveOut.u_STATUS_statusErr = TAPAS_PROTECT_OVERTEMP;
+         }
+         // do the overcurrent check
+-        if( (_IQtoF(gMotorVars.IdcBus_A) > 2.0)
++        if( (_IQtoF(gMotorVars.IdcBus_A) > TAPAS_UPPER_CURRENT_LIMIT)
+              && (HAL_getDCbusCurrentOffsetCalibrationDone()) ){
+             gMotorVars.Flag_Run_Identify = false;
+             TAPASProtect = TAPAS_PROTECT_OVERCURRENT;
+-            slaveResp.u_STATUS_statusErr = TAPAS_PROTECT_OVERCURRENT;
++            coilSlaveOut.u_STATUS_statusErr = TAPAS_PROTECT_OVERCURRENT;
+         }
+ 
+         CTRL_Obj *obj = (CTRL_Obj *)ctrlHandle;
+@@ -408,97 +405,27 @@ void main(void)
+         gCounter_updateGlobals++;
+ 
+ 
+-        if(CTRL_isError(ctrlHandle))
+-          {
+-            // set the enable controller flag to false
+-            CTRL_setFlag_enableCtrl(ctrlHandle,false);
+-
+-            // set the enable system flag to false
+-            gMotorVars.Flag_enableSys = false;
+-
+-            // disable the PWM
+-            HAL_disablePwm(halHandle);
+-          }
+-        else
+-          {
+-            // update the controller state
+-            bool flag_ctrlStateChanged = CTRL_updateState(ctrlHandle);
+-
+-            // enable or disable the control
+-            CTRL_setFlag_enableCtrl(ctrlHandle, gMotorVars.Flag_Run_Identify);
+-
+-            if(flag_ctrlStateChanged)
+-              {
+-                CTRL_State_e ctrlState = CTRL_getState(ctrlHandle);
+-                EST_State_e estState = EST_getState(obj->estHandle);
+-
+-                if(ctrlState == CTRL_State_OffLine)
+-                  {
+-                    // enable the PWM
+-                    HAL_enablePwm(halHandle);
+-                  }
+-                else if(ctrlState == CTRL_State_OnLine)
+-                  {
+-                    if((estState < EST_State_LockRotor) || (estState > EST_State_MotorIdentified))
+-                      {
+-                        // update the ADC bias values
+-                        HAL_updateAdcBias(halHandle);
+-                      }
+-
+-                    // Return the bias value for currents
+-                    gMotorVars.I_bias.value[0] = HAL_getBias(halHandle,HAL_SensorType_Current,0);
+-                    gMotorVars.I_bias.value[1] = HAL_getBias(halHandle,HAL_SensorType_Current,1);
+-                    gMotorVars.I_bias.value[2] = HAL_getBias(halHandle,HAL_SensorType_Current,2);
+-
+-                    // Return the bias value for voltages
+-                    gMotorVars.V_bias.value[0] = HAL_getBias(halHandle,HAL_SensorType_Voltage,0);
+-                    gMotorVars.V_bias.value[1] = HAL_getBias(halHandle,HAL_SensorType_Voltage,1);
+-                    gMotorVars.V_bias.value[2] = HAL_getBias(halHandle,HAL_SensorType_Voltage,2);
+-
+-                    // enable the PWM
+-                    HAL_enablePwm(halHandle);
+-                  }
+-                else if(ctrlState == CTRL_State_Idle)
+-                  {
+-                    // disable the PWM
+-                    HAL_disablePwm(halHandle);
+-                    gMotorVars.Flag_Run_Identify = false;
+-                    // clear the bit in the masterCmd - structure
+-                    masterCmd.flags &= ~(1 << 1);
+-                  }
+-
+-                if((CTRL_getFlag_enableUserMotorParams(ctrlHandle) == true) &&
+-                  (ctrlState > CTRL_State_Idle) &&
+-                  (gMotorVars.CtrlVersion.minor == 6))
+-                  {
+-                    // call this function to fix 1p6
+-                    USER_softwareUpdate1p6(ctrlHandle);
+-                  }
+-
+-              }
+-          }
+-
+         if(EST_isMotorIdentified(obj->estHandle))
+           {
+             // set the current ramp
+-            EST_setMaxCurrentSlope_pu(obj->estHandle,gMaxCurrentSlope);
++            //EST_setMaxCurrentSlope_pu(obj->estHandle,gMaxCurrentSlope);
+             gMotorVars.Flag_MotorIdentified = true;
+ 
+             // set the speed reference
+-            CTRL_setSpd_ref_krpm(ctrlHandle,gMotorVars.SpeedRef_krpm);
++            //CTRL_setSpd_ref_krpm(ctrlHandle,gMotorVars.SpeedRef_krpm);
+ 
+             // set the speed acceleration
+-            CTRL_setMaxAccel_pu(ctrlHandle,_IQmpy(MAX_ACCEL_KRPMPS_SF,gMotorVars.MaxAccel_krpmps));
++            //CTRL_setMaxAccel_pu(ctrlHandle,_IQmpy(MAX_ACCEL_KRPMPS_SF,gMotorVars.MaxAccel_krpmps));
+ 
+             if(Flag_Latch_softwareUpdate)
+             {
+               Flag_Latch_softwareUpdate = false;
+ 
+-              USER_calcPIgains(ctrlHandle);
++              //USER_calcPIgains(ctrlHandle);
+             }
+             if(EST_getState(obj->estHandle) == EST_State_Idle){
+                 // update the slave response
+-                slaveResp.flags |= (1<<5);
++                coilSlaveOut.flags |= (1<<5);
+             }
+           }
+         else
+@@ -506,8 +433,8 @@ void main(void)
+             Flag_Latch_softwareUpdate = true;
+ 
+             // the estimator sets the maximum current slope during identification
+-            gMaxCurrentSlope = EST_getMaxCurrentSlope_pu(obj->estHandle);
+-            slaveResp.flags &= ~(1<<5);
++            //gMaxCurrentSlope = EST_getMaxCurrentSlope_pu(obj->estHandle);
++            coilSlaveOut.flags &= ~(1<<5);
+           }
+ 
+ 
+@@ -516,36 +443,11 @@ void main(void)
+           {
+             // reset the counter
+             gCounter_updateGlobals = 0;
+-
+-            updateGlobalVariables_motor(ctrlHandle);
++            updateGlobalVariables_common();
++            //updateGlobalVariables_motor(ctrlHandle);
++            updateGlobalVariables_coil();
+           }
+ 
+-        if(CTRL_getMotorType(ctrlHandle) == MOTOR_Type_Induction)
+-          {
+-            // recalculate Kp and Ki gains to fix the R/L limitation of 2000.0, and Kp limit to 0.11
+-            recalcKpKi(ctrlHandle);
+-
+-            // set electrical frequency limit to zero while identifying an induction motor
+-            setFeLimitZero(ctrlHandle);
+-
+-            // calculate Dir_qFmt for acim motors
+-            acim_Dir_qFmtCalc(ctrlHandle);
+-          }
+-        else
+-          {
+-            // recalculate Kp and Ki gains to fix the R/L limitation of 2000.0, and Kp limit to 0.11
+-        	// as well as recalculates gains based on estimator state to allow low inductance pmsm to id
+-        	recalcKpKiPmsm(ctrlHandle);
+-
+-            // calculate an Ls qFmt that allows ten times smaller inductance compared to Lhf
+-            CTRL_calcMax_Ls_qFmt(ctrlHandle, &gMax_Ls_qFmt);
+-
+-            gLs_pu = EST_getLs_d_pu(obj->estHandle);
+-            gLs_qFmt = EST_getLs_qFmt(obj->estHandle);
+-          }
+-
+-        // enable/disable the forced angle
+-        EST_setFlag_enableForceAngle(obj->estHandle,gMotorVars.Flag_enableForceAngle);
+ 
+         // enable or disable power warp
+         CTRL_setFlag_enablePowerWarp(ctrlHandle,gMotorVars.Flag_enablePowerWarp);
+@@ -570,7 +472,7 @@ void main(void)
+     CTRL_setParams(ctrlHandle,&gUserParams);
+     gMotorVars.Flag_Run_Identify = false;
+     // clear the bit in the masterCmd - structure
+-    masterCmd.flags &= ~(1<<1);
++    coilMasterOut.flags &= ~(1<<1);
+ 
+   } // end of for(;;) loop
+ 
+@@ -600,7 +502,7 @@ interrupt void mainISR(void)
+ 
+ 
+   // write the PWM compare values
+-  HAL_writePwmData(halHandle,&gPwmData);
++  //HAL_writePwmData(halHandle,&gPwmData);
+ 
+ 
+   // setup the controller
+@@ -616,7 +518,38 @@ interrupt void mainISR(void)
+   return;
+ } // end of mainISR() function
+ 
++void updateGlobalVariables_common()
++{
++
++
++    // Get the DC buss voltage
++    gMotorVars.VdcBus_kV = _IQmpy(gAdcData.dcBus,_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
++
++    // Get the Board's Temperature
++    gMotorVars.TempSenDegCelsius = gAdcData.TempSensor;
+ 
++    /* Extra Functions for FIKAT */
++     // Get the DC bus current
++     if(g_dcBusCurrentIndex < g_dcBusCurrentSamples){
++         g_dcBusCurrent[g_dcBusCurrentIndex] = _IQmpy(gAdcData.I_dcBus,_IQ(USER_IQ_FULL_SCALE_CURRENT_A)) - _IQ(HAL_getDCbusCurrentOffset());//- _IQ(I_DC_Bus_offset);
++         DCBusC[g_dcBusCurrentIndex] = _IQtoF(g_dcBusCurrent[g_dcBusCurrentIndex]);
++         g_dcBusCurrentIndex++;
++     }else{
++         g_dcBusCurrentIndex = 0;
++         g_dcBusCurrent[g_dcBusCurrentIndex] = _IQmpy(gAdcData.I_dcBus,_IQ(USER_IQ_FULL_SCALE_CURRENT_A))- _IQ(HAL_getDCbusCurrentOffset());// - _IQ(I_DC_Bus_offset);
++         DCBusC[g_dcBusCurrentIndex] = _IQtoF(g_dcBusCurrent[g_dcBusCurrentIndex]);
++     }
++     int i = 0;
++     for(i = 0; i < g_dcBusCurrentSamples; i++){
++          mean = mean + (DCBusC[i]);
++
++     }
++
++         mean = mean / (float)(g_dcBusCurrentSamples);
++
++     gMotorVars.IdcBus_A = _IQ(mean);
++
++}
+ void updateGlobalVariables_motor(CTRL_Handle handle)
+ {
+     // do the exchange of SPI-messages
+@@ -627,16 +560,16 @@ void updateGlobalVariables_motor(CTRL_Handle handle)
+     CTRL_Obj *obj = (CTRL_Obj *)handle;
+ 
+   // get the speed estimate
+-  gMotorVars.Speed_krpm = EST_getSpeed_krpm(obj->estHandle);
++  //gMotorVars.Speed_krpm = EST_getSpeed_krpm(obj->estHandle);
+ 
+   // get the real time speed reference coming out of the speed trajectory generator
+-  gMotorVars.SpeedTraj_krpm = _IQmpy(CTRL_getSpd_int_ref_pu(handle),EST_get_pu_to_krpm_sf(obj->estHandle));
++  //gMotorVars.SpeedTraj_krpm = _IQmpy(CTRL_getSpd_int_ref_pu(handle),EST_get_pu_to_krpm_sf(obj->estHandle));
+ 
+   // get the magnetizing current
+   gMotorVars.MagnCurr_A = EST_getIdRated(obj->estHandle);
+ 
+   // get the rotor resistance
+-  gMotorVars.Rr_Ohm = EST_getRr_Ohm(obj->estHandle);
++  //gMotorVars.Rr_Ohm = EST_getRr_Ohm(obj->estHandle);
+ 
+   // get the stator resistance
+   gMotorVars.Rs_Ohm = EST_getRs_Ohm(obj->estHandle);
+@@ -648,7 +581,7 @@ void updateGlobalVariables_motor(CTRL_Handle handle)
+   gMotorVars.Lsq_H = EST_getLs_q_H(obj->estHandle);
+ 
+   // get the flux in V/Hz in floating point
+-  gMotorVars.Flux_VpHz = EST_getFlux_VpHz(obj->estHandle);
++  //gMotorVars.Flux_VpHz = EST_getFlux_VpHz(obj->estHandle);
+ 
+   // get the controller state
+   gMotorVars.CtrlState = CTRL_getState(handle);
+@@ -656,45 +589,20 @@ void updateGlobalVariables_motor(CTRL_Handle handle)
+   // get the estimator state
+   gMotorVars.EstState = EST_getState(obj->estHandle);
+ 
+-  // Get the DC buss voltage
+-  gMotorVars.VdcBus_kV = _IQmpy(gAdcData.dcBus,_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
+-
+   // Get the Values from the Analog inputs
+-  gMotorVars.AnalogInpVals_kV[0] =  _IQmpy(gAdcData.AnalogIn[0],_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
+-
+-  gMotorVars.AnalogInpVals_kV[1] =  _IQmpy(gAdcData.AnalogIn[1],_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
++  //gMotorVars.AnalogInpVals_kV[0] =  _IQmpy(gAdcData.AnalogIn[0],_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
+ 
+-  gMotorVars.AnalogInpVals_kV[2] =  _IQmpy(gAdcData.AnalogIn[2],_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
++  //gMotorVars.AnalogInpVals_kV[1] =  _IQmpy(gAdcData.AnalogIn[1],_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
+ 
+-  gMotorVars.AnalogInpVals_kV[3] =  _IQmpy(gAdcData.AnalogIn[3],_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
++  //gMotorVars.AnalogInpVals_kV[2] =  _IQmpy(gAdcData.AnalogIn[2],_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
+ 
+-  gMotorVars.AnalogInpVals_kV[4] =  _IQmpy(gAdcData.AnalogIn[4],_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
++  //gMotorVars.AnalogInpVals_kV[3] =  _IQmpy(gAdcData.AnalogIn[3],_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
+ 
+-  gMotorVars.AnalogInpVals_kV[5] =  _IQmpy(gAdcData.AnalogIn[5],_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
++  //gMotorVars.AnalogInpVals_kV[4] =  _IQmpy(gAdcData.AnalogIn[4],_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
+ 
+-  // Get the Board's Temperature
+-  gMotorVars.TempSenDegCelsius = gAdcData.TempSensor;
++  //gMotorVars.AnalogInpVals_kV[5] =  _IQmpy(gAdcData.AnalogIn[5],_IQ(USER_IQ_FULL_SCALE_VOLTAGE_V/1000.0));
+ 
+-  /* Extra Functions for FIKAT */
+-   // Get the DC bus current
+-   if(g_dcBusCurrentIndex < g_dcBusCurrentSamples){
+-       g_dcBusCurrent[g_dcBusCurrentIndex] = _IQmpy(gAdcData.I_dcBus,_IQ(USER_IQ_FULL_SCALE_CURRENT_A)) - _IQ(HAL_getDCbusCurrentOffset());//- _IQ(I_DC_Bus_offset);
+-       DCBusC[g_dcBusCurrentIndex] = _IQtoF(g_dcBusCurrent[g_dcBusCurrentIndex]);
+-       g_dcBusCurrentIndex++;
+-   }else{
+-       g_dcBusCurrentIndex = 0;
+-       g_dcBusCurrent[g_dcBusCurrentIndex] = _IQmpy(gAdcData.I_dcBus,_IQ(USER_IQ_FULL_SCALE_CURRENT_A))- _IQ(HAL_getDCbusCurrentOffset());// - _IQ(I_DC_Bus_offset);
+-       DCBusC[g_dcBusCurrentIndex] = _IQtoF(g_dcBusCurrent[g_dcBusCurrentIndex]);
+-   }
+-   int i = 0;
+-   for(i = 0; i < g_dcBusCurrentSamples; i++){
+-        mean = mean + (DCBusC[i]);
+ 
+-   }
+-
+-       mean = mean / (float)(g_dcBusCurrentSamples);
+-
+-   gMotorVars.IdcBus_A = _IQ(mean);
+ 
+ 
+   // write Values of interest to our response-structure
+@@ -717,10 +625,19 @@ void updateGlobalVariables_motor(CTRL_Handle handle)
+   slaveResp.f_ANALOG_IN_5 = _IQtoF(gMotorVars.AnalogInpVals_kV[5]);
+   slaveResp.u_STATUS_DIN =  (uint16_t)(gMotorVars.DigitalIn[0] << 0)||(uint16_t)(gMotorVars.DigitalIn[1] << 1)||
+                             (uint16_t)(gMotorVars.DigitalIn[2] << 2)||(uint16_t)(gMotorVars.DigitalIn[0] << 3);
++
++
+   return;
+ } // end of updateGlobalVariables_motor() function
+ 
+-
++void updateGlobalVariables_coil()
++{
++    coilSlaveOut.f_STATUS_UdcBus = _IQtoF(gMotorVars.VdcBus_kV);
++    coilSlaveOut.f_STATUS_IdcBus = _IQtoF(gMotorVars.IdcBus_A);
++    coilSlaveOut.f_STATUS_boardTemp = _IQtoF(gMotorVars.TempSenDegCelsius);
++    coilSlaveOut.u_STATUS_DIN =  (uint16_t)(gMotorVars.DigitalIn[0] << 0)||(uint16_t)(gMotorVars.DigitalIn[1] << 1)||
++                                (uint16_t)(gMotorVars.DigitalIn[2] << 2)||(uint16_t)(gMotorVars.DigitalIn[0] << 3);
++}
+ void CTRL_resetLs_qFmt(CTRL_Handle handle, const uint_least8_t Ls_qFmt)
+ {
+   CTRL_Obj *obj = (CTRL_Obj *)handle;
+diff --git a/motorware-current/sw/solutions/instaspin_foc/src/main.h b/motorware-current/sw/solutions/instaspin_foc/src/main.h
+index f7984f8..3f3381d 100644
+--- a/motorware-current/sw/solutions/instaspin_foc/src/main.h
++++ b/motorware-current/sw/solutions/instaspin_foc/src/main.h
+@@ -248,7 +248,8 @@ void runSetTrigger(void);
+ //! \brief     Updates the global motor variables 
+ //! 
+ void updateGlobalVariables_motor(CTRL_Handle handle);
+-
++void updateGlobalVariables_common();
++void updateGlobalVariables_coil();
+ 
+ //! \brief     Updates the global variables 
+ //! 
